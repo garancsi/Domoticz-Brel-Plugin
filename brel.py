@@ -57,8 +57,9 @@ class brel:
 				self.brel_devices['devices'][Mac] = {}
 			self.brel_devices['devices'][Mac] = data
 
-			if 'grp-0' in self.brel_devices['devices']:
+			if 'grp-0' in self.brel_devices['devices'] and 'currentPosition' in data['data']:
 				self.brel_devices['devices']['grp-0']['data']['currentPosition'] = data['data']['currentPosition']
+			if 'grp-0' in self.brel_devices['devices'] and 'currentAngle' in data['data']:
 				self.brel_devices['devices']['grp-0']['data']['currentAngle'] = data['data']['currentAngle']
 
 
@@ -72,6 +73,12 @@ class brel:
 
 		if Commands:
 			for com in Commands:
+				if com == 'OFF':
+					JSON_DATA ['operation'] = 1
+				if com == 'ON':
+					JSON_DATA ['operation'] = 0
+				if com == 'STOP':
+					JSON_DATA ['operation'] = 2
 				if com == 'P':
 					JSON_DATA ['targetPosition'] = int(Commands['P'])
 				if com == 'A':

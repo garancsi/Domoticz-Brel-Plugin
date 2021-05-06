@@ -63,6 +63,7 @@ from brel import brel
 from Crypto.Cipher import AES
 import binascii
 import datetime
+import json
 
 class BasePlugin:
 	u_port = 32100 # unicast
@@ -101,7 +102,7 @@ class BasePlugin:
 			return Error
 
 	def indexRegisteredDevices(self):
-
+		
 		if len(Devices) > 0:
 			# Some devices are already defined
 
@@ -113,7 +114,7 @@ class BasePlugin:
 						self.updateDevice(aUnit, override_level=None, Report=True)
 					else:
 						self.updateDevice(aUnit)
-
+				
 				return [dev.DeviceID for key, dev in Devices.items()]
 
 			except (HandshakeError, ReadTimeoutError, WriteTimeoutError):
@@ -131,7 +132,9 @@ class BasePlugin:
 
 		try:
 			devID = str(Devices[Unit].DeviceID).split(":")[0]
-			if devID in self.brel_devices['devices']:
+
+			if 'devices' in self.brel_devices.keys() and devID in self.brel_devices['devices']:
+
 				if Report is None:
 					brel_api = brel(Parameters['Address'], self.u_port, self.brel_devices)
 					self.brel_devices = brel_api.request_device_status(devID)
@@ -143,9 +146,20 @@ class BasePlugin:
 		except TypeError:
 			self.hasTimedOut = True
 			return
+		
+		if Devices[Unit].Type == 25:
+			if 'operation' in brel_device['data']:
+				nValue = brel_device['data']['operation']
+				if brel_device['data']['operation'] == 1:
+				    nValue = 0
+				if brel_device['data']['operation'] == 0:
+				    nValue = 1
+	
+				Devices[Unit].Update(nValue=nValue, sValue=str(nValue))
+				deviceUpdated = True
 
 		if Devices[Unit].Type == 244:
-
+			
 			# Switches
 			if Devices[Unit].SwitchType == 0:
 				# On/off - device
@@ -169,7 +183,7 @@ class BasePlugin:
 							nValue = 1
 						else:
 							nValue = 2
-
+						
 						Devices[Unit].Update(
 							nValue=nValue,
 							sValue=str(position),
@@ -200,15 +214,29 @@ class BasePlugin:
 		return deviceUpdated
 
 	def registerDevices(self):
+		hasPADevice = False
+		hasOnOffDevice = False
 
 		try:
 			# Get the token and device list
 			brel_api = brel(Parameters['Address'], self.u_port, self.brel_devices)
 			self.brel_devices = brel_api.request_device_list()
+			for brel_device in self.brel_devices['devices']:
+				if self.brel_devices['devices'][brel_device]['deviceType'] != '02000001':
+					if self.brel_devices['devices'][brel_device]['deviceType'] == '10000000':
+						hasOnOffDevice = True
+					else:
+						hasPADevice = True
 
-			if 'grp-0' not in self.brel_devices['devices']:
+			if hasPADevice and ('grp-0' not in self.brel_devices['devices']):
 				# Add group-devices to self.brel_devices
 				self.brel_devices['devices']['grp-0'] = { 'mac': 'grp-0', 'deviceType': 'group', 'data': { 'currentPosition': 0, 'currentAngle': 0, 'RSSI': 12 } }
+			
+			if hasOnOffDevice and ('grp-1' not in self.brel_devices['devices']):
+				# Add group-devices to self.brel_devices
+				self.brel_devices['devices']['grp-1'] = { 'mac': 'grp-1', 'deviceType': 'group', 'data': { 'RSSI': 12 } }
+			
+			
 		except:
 			Domoticz.Debug('Connection to gateway timed out')
 			self.hasTimedOut = True
@@ -239,7 +267,7 @@ class BasePlugin:
 			devType = str(self.brel_devices['devices'][brel_device]['deviceType'])
 
 			if devType != '02000001': # Gateway
-
+				
 				if devType == 'group':
 					name = 'Group All'
 					report = True
@@ -247,13 +275,28 @@ class BasePlugin:
 					name = 'Blinds {}'
 					report = None
 
-					if devID + ":P" not in unitIds or devID + ":A" not in unitIds:
-						if len(Devices) > 0:
-							name_number = int(len(Devices) / 2)
+				if hasOnOffDevice or devType == '10000000':
+					if devID not in unitIds:
 						name_number = name_number + 1
 						name = name.format(name_number)
 
-				if devID + ":P" not in unitIds:
+						new_unit_id = firstFree()
+						Domoticz.Device(
+							Name=name,
+							Unit=new_unit_id,
+							Type=25,
+							Subtype=6,
+							Switchtype=3,
+							DeviceID=devID,
+							Used=1,
+						).Create()
+						self.updateDevice(new_unit_id, None, Report=report)
+					continue
+
+				if hasPADevice and devID + ":P" not in unitIds:
+					name_number = name_number + 1
+					name = name.format(name_number)
+
 					new_unit_id = firstFree()
 					Domoticz.Device(
 						Name=name,
@@ -266,7 +309,10 @@ class BasePlugin:
 					).Create()
 					self.updateDevice(new_unit_id, None, Report=report)
 
-				if devID + ":A" not in unitIds:
+				if hasPADevice and devID + ":A" not in unitIds:
+					name_number = name_number + 1
+					name = name.format(name_number)
+
 					new_unit_id = firstFree()
 					Domoticz.Device(
 						Name=name + " Tilt",
@@ -346,21 +392,29 @@ class BasePlugin:
 					self.brel_devices['devices'][Mac]['data'] = Data['data']
 
 					# And also update the "All" devices to reflect the positions of last updated device
-					self.brel_devices['devices']['grp-0']['data']['currentPosition'] = Data['data']['currentPosition']
-					self.brel_devices['devices']['grp-0']['data']['currentAngle'] = Data['data']['currentAngle']
+					if 'currentPosition' in Data['data']:
+						self.brel_devices['devices']['grp-0']['data']['currentPosition'] = Data['data']['currentPosition']
+					if 'currentAngle' in Data['data']:
+						self.brel_devices['devices']['grp-0']['data']['currentAngle'] = Data['data']['currentAngle']
 
-					Unit = int(self.DeviceIDdict[str(Mac)+':P'])
-					self.updateDevice(Unit, None, True)
-					Unit = int(self.DeviceIDdict[str(Mac)+':A'])
-					self.updateDevice(Unit, None, True)
+					if Data['deviceType'] != '10000000':
+						Unit = int(self.DeviceIDdict[str(Mac)+':P'])
+						self.updateDevice(Unit, None, True)
+						Unit = int(self.DeviceIDdict[str(Mac)+':A'])
+						self.updateDevice(Unit, None, True)
+					else:
+						Unit = int(self.DeviceIDdict[str(Mac)])
+						self.updateDevice(Unit, None, True)
+
 
 					if self.overrideGrpCommands > 0:
 						self.overrideGrpCommands = self.overrideGrpCommands - 1
 					else:
-						Unit = int(self.DeviceIDdict['grp-0'+':P'])
-						self.updateDevice(Unit, None, True)
-						Unit = int(self.DeviceIDdict['grp-0'+':A'])
-						self.updateDevice(Unit, None, True)
+						if Data['deviceType'] != '10000000':
+							Unit = int(self.DeviceIDdict['grp-0'+':P'])
+							self.updateDevice(Unit, None, True)
+							Unit = int(self.DeviceIDdict['grp-0'+':A'])
+							self.updateDevice(Unit, None, True)
 
 			Domoticz.Debug(Connection.Name + ": " + str(Data))
 
@@ -375,6 +429,7 @@ class BasePlugin:
 		devID = str(Devices[Unit].DeviceID).split(":")[0]
 		devType = str(self.brel_devices['devices'][devID]['deviceType'])
 		devCommands = {}
+		defaults = {}
 
 		if Command == "On" or Command == "Off":
 			if Parameters['Mode2']:
@@ -396,7 +451,12 @@ class BasePlugin:
 		# 	defaults = eval("{0:{1:{'P':15,'A':25},0:{'P':80,'A':80}},1:{1:{'P':15,'A':25},0:{'P':80,'A':80}},3:{1:{'P':15,'A':25},0:{'P':80,'A':80}}}")
 
 		try:
-			if Command == "On": # closed
+			if Command == "Stop": # stopped
+				if devID == 'grp-1' or self.brel_devices['devices'][devID]['deviceType'] == '10000000':
+					devCommands['STOP'] = True
+			elif Command == "On": # closed
+				if devID == 'grp-1' or self.brel_devices['devices'][devID]['deviceType'] == '10000000':
+					devCommands['ON'] = True
 				if Devices[Unit].DeviceID[-2:] == ':P':
 					try:
 						if idx in defaults:
@@ -411,6 +471,8 @@ class BasePlugin:
 					devCommands['A'] = 80 # 90 degrees = open
 
 			elif Command == "Off": # open
+				if devID == 'grp-1' or self.brel_devices['devices'][devID]['deviceType'] == '10000000':
+					devCommands['OFF'] = True
 				if Devices[Unit].DeviceID[-2:] == ':P':
 					try:
 						if idx in defaults:
@@ -446,7 +508,7 @@ class BasePlugin:
 
 				if devID == 'grp-0':
 					for brel_device in self.brel_devices['devices']:
-						if self.brel_devices['devices'][brel_device]['deviceType'] != 'group' and self.brel_devices['devices'][brel_device]['deviceType'] != '02000001': # Gateway::
+						if self.brel_devices['devices'][brel_device]['deviceType'] not in ['group','02000001','10000000']: # Gateway::
 
 							if 'P' in devCommands:
 								self.brel_devices['devices'][brel_device]['data']['currentPosition'] = devCommands['P']
@@ -459,14 +521,31 @@ class BasePlugin:
 							self.overrideGrpCommands = self.overrideGrpCommands + 1
 
 							for com in devCommands:
-								self.updateDevice(int(self.DeviceIDdict[brel_device+':'+com]), None, Report=True)
+								tmp = brel_device
+								if self.brel_devices['devices'][brel_device]['deviceType'] != '10000000':
+								    tmp = tmp + ':' + com
+								self.updateDevice(int(self.DeviceIDdict[tmp]), None, Report=True)
+
+				elif devID == 'grp-1':
+					for brel_device in self.brel_devices['devices']:
+						if self.brel_devices['devices'][brel_device]['deviceType'] == '10000000': # 433 radio devices::
+							brel_api = brel(Parameters['Address'], self.u_port, self.brel_devices)
+							brel_command_ack = brel_api.send_command(brel_device, devCommands)
+
+							self.overrideGrpCommands = self.overrideGrpCommands + 1
+
+							for com in devCommands:
+								self.updateDevice(int(self.DeviceIDdict[brel_device]), None, Report=True)
 
 				else:
 					brel_api = brel(Parameters['Address'], self.u_port, self.brel_devices)
 					brel_command_ack = brel_api.send_command(devID, devCommands)
-
-				for com in devCommands:
-					self.updateDevice(int(self.DeviceIDdict[devID+':'+com]), None, Report=True)
+				if devID not in ['grp-0','grp-1']:
+					for com in devCommands:
+						tmp = devID
+						if self.brel_devices['devices'][devID]['deviceType'] != '10000000':
+							tmp = tmp + ':' + com
+						self.updateDevice(int(self.DeviceIDdict[tmp]), None, Report=True)
 
 			Domoticz.Debug("Finnished command")
 
