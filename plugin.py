@@ -148,7 +148,13 @@ class BasePlugin:
 			return
 		
 		if Devices[Unit].Type == 25:
-			if 'operation' in brel_device['data']:
+			if 'currentPosition' in brel_device['data']:
+				nValue = 2
+				if int(brel_device['data']['currentPosition']) == 100:
+				    nValue = 1
+				if int(brel_device['data']['currentPosition']) == 0:
+				    nValue = 0
+			elif 'operation' in brel_device['data']:
 				nValue = brel_device['data']['operation']
 				if brel_device['data']['operation'] == 1:
 				    nValue = 0
@@ -392,10 +398,15 @@ class BasePlugin:
 					self.brel_devices['devices'][Mac]['data'] = Data['data']
 
 					# And also update the "All" devices to reflect the positions of last updated device
-					if 'currentPosition' in Data['data']:
-						self.brel_devices['devices']['grp-0']['data']['currentPosition'] = Data['data']['currentPosition']
-					if 'currentAngle' in Data['data']:
-						self.brel_devices['devices']['grp-0']['data']['currentAngle'] = Data['data']['currentAngle']
+					if Data['deviceType'] == '10000000':
+						group = 'grp-1'
+					else:
+						group = 'grp-0'
+						
+					if ('currentPosition' in Data['data']) and (group in self.brel_devices['devices']):
+						self.brel_devices['devices'][group]['data']['currentPosition'] = Data['data']['currentPosition']
+					if ('currentAngle' in Data['data']) and (group in self.brel_devices['devices']):
+						self.brel_devices['devices'][group]['data']['currentAngle'] = Data['data']['currentAngle']
 
 					if Data['deviceType'] != '10000000':
 						Unit = int(self.DeviceIDdict[str(Mac)+':P'])
@@ -411,9 +422,9 @@ class BasePlugin:
 						self.overrideGrpCommands = self.overrideGrpCommands - 1
 					else:
 						if Data['deviceType'] != '10000000':
-							Unit = int(self.DeviceIDdict['grp-0'+':P'])
+							Unit = int(self.DeviceIDdict[group+':P'])
 							self.updateDevice(Unit, None, True)
-							Unit = int(self.DeviceIDdict['grp-0'+':A'])
+							Unit = int(self.DeviceIDdict[group+':A'])
 							self.updateDevice(Unit, None, True)
 
 			Domoticz.Debug(Connection.Name + ": " + str(Data))
